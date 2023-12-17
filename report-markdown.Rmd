@@ -1,0 +1,295 @@
+---
+title: "Report of AACSB Missions Analysis"
+output:
+  word_document: default
+  html_document: default
+date: "2023-12-07"
+Team: Dan Hua Li, Mariam Tyawil
+---
+Data from Prof. Zhu
+
+##Project Summary:
+This project aims to evaluate the significance of AACSB certification by analyzing how other educational institutions incorporate the AACSB logo on their websites and formulate their missions. The primary objective is to develop diverse and informative models that can unveil concealed patterns and trends.
+
+The steps taken to explore this project are as follows:
+
+1. Data Initialization/ Cleaning:
+
+a)	Removal of rows with null values in national ranking( 200->120).
+b)	Introduction of the "ReRanking" feature, condensing 38 national ranking values into 8 to align with the dataset size. Adjustments adhere to dataset policies.
+c)	Renaming variables to address formatting issues.
+
+2. Create DTM:
+a)	Tokenize the text in institutional mission on school web(Mission).
+b)	Create a vocabulary by pruning the customized Stopword from Token document, 
+c)	Prune the vocabulary with settings for rare and common words through  adjusting the maximum and minimum of document proportion.
+d)	Vectorize the vocabulary, generate a DTM for LDA, sentiment analysis and classification modeling.
+
+3. LDA Topic Modeling:
+a)	Utilize a loop (From Prof. Zhu) for
+b)	LDA$new function using 3, 5, 8, 15, 100 topics. Use fit_transform function to estimate the above topic model that approximates the counts in our DTM in the loop. 
+c)	After the loop, get multiple Topic models and the attribution of probabilities w.
+d)	Plot Log likelihood on different topic models.
+
+4. Unveil distinctive Mission Themes:
+	Identify key themes on Missions of 3, 5, 8 topic models.
+	Logistic Multinomial Regression: use these fitted values to look at some short (less than 7 token) missions with high probability for 1,3,6 rankings.
+
+5. LDA Regression for sentiment themes:
+	Target 1: LDA regression get suggesting model. 
+	Method: 
+a)	Combine the Ranking(converted to a factor) with the topics in a data frame.
+b)	Run random forest with the argument prob=TRUE to get a model that predicts the probabilities across 8 rankings for each Mission. The same method to “LogoOnSchoolWeb”.
+c)	Use a loop for LDA regression get the suggestion choices which topic model elevated scores in specific topics. (result is 8 topics model)
+	Target 2:  Exam the relationship between ranking and logo(weather the logo on school web) against the mission themes provided by above best topic models.
+	Method: Use the ranger function to build a forest that predicts the Ranking probabilities given document topics . Here, Utilize 8 topic model to predict the first row which ranking belong to 1 and AACSB logon is not precent on school web (value is 0). The predictive result hints the relationship we are interested in.
+	
+
+6. Word Embedding for Model Enhancement:
+Integration of word embedding techniques to enhance the overall model performance.
+
+##### 
+Read the dataset and create a data frame, Get the proper name of columns.
+```{r}
+AACSB <- read.csv("C:/Danhua/Umass-lowell/10.advanced Data mining 6160/project/aacsb1.csv", header=TRUE,sep=",",stringsAsFactors=FALSE)
+names(AACSB)
+```
+2.DTM
+In this section, we construct a Document-Term Matrix (DTM) from "MissionOnschoolWeb" column of the AACSB dataset. Additionally, we enhance the analysis by incorporating popular but unuseful words into the stopword dictionary.
+```{r}
+library(text2vec) 
+library(Matrix)  
+tokmission = itoken(AACSB$MissionOnschoolWeb, 
+                 preprocessor = tolower, 
+                 tokenizer = word_tokenizer, 
+                 ids = AACSB$AACSB_id)
+
+# create the vocab and prune stopwords
+vocab<-create_vocabulary(tokmission, 
+                         stopword=c("if","and","or","univeristy", "universities","work", "working", "lives", "life","undergraduate","undergraduates","administrition","be", "beyond","being", "by", "based", "business","college", "campus","class", "classes", "do","does", "degree","degrees","everything", "every","educate", "educating", "education", "goal","goals", "on", "one", "online","other","of","individual","is","it","its","take", "teach","teaching","through","this", "that", "these", "those","the","they", "them","from", "faculty","future","teach","teaching","graduate", "graduates",  "state", "school", "study", "staff", "skill",  "skills","statement","have","having","has","high","highly", "positive","positively","program","prepare", "programs","mission","many","mean","meaning", "more","much","make","made","vision","not","no", "need","needs","value","values","us" ))
+
+# prune vocab with settings for rare and common words
+vocab<-prune_vocabulary(vocab,
+                        doc_proportion_max = 0.1,
+                        doc_proportion_min = 0.001)
+
+vectorizer = vocab_vectorizer(vocab)
+dtm = create_dtm(tokmission, vectorizer)
+
+```
+3.	LDA Topic modeling
+Before delving into the analysis of topics, an exploration is conducted to identify the optimal number of topics. Using a range of topic numbers such as 5, 10, 15, 20, 100, and 300, the log-likelihood line consistently shows an upward trend. Below codes try to fine-tune the topic number for the relatively small dataset consisting of 112 rows, specific topic numbers, including 3, 5, and 8, are selected. The objective is not only to plot the maximum log-likelihood, but also extract parameters of models, and w for later using
+
+
+```{r}
+K<- c(3, 5, 8, 10, 15, 20, 100)
+logliks<-c()
+ws<-list()
+models<-c() 
+for (i in K) {
+  print(i)
+  tpc <- LDA$new(n_topics = i)
+  W <- tpc$fit_transform(dtm, n_iter=150)
+  logliks <- c(logliks,max(attributes(W)$likelihood[,2]))
+  models<- c(models, tpc) 
+  ws<- append(ws, list(W))
+}
+plot(K, logliks, type="b") 
+```
+Questions on this codes: do you think it is possible add Lasso to the model to penalty the k, don't let the model choose big k? or when k become bigger will lead to overfit without CV and their likelihood certainly turn to bigger consistently in sample.
+
+4.	Unveiling Distinctive mission themes
+
+In the pursuit of understanding the underlying themes within the dataset, the analysis focused on models with 3, 5, and 8 topic models. Each of these topic selections reveals unique insights into the core aspects of the institution's identity and mission.
+
+```{r}
+models[[1]]$get_top_words(n=10) 
+```
+### Topic 1: the mission involves relationship solutions and critical thinking.
+### topic 2: involves dynamic international innovation and social/career experiencce.
+### topic 3: involves the alumi and careers of economic, serve, technology success.
+
+### notice, when use toopic lift (lambda=0),the result won't show properly.
+```{r}
+models[[2]]$get_top_words(n=10) # 5 topics
+```
+### topic 1: educates developing thinking and enhance the diversity experiential
+### topic 2: involve local alumni, partners engagement.
+### topic 3: involve success focused on serve, socially activities,and new challenges.
+### topic 4: involve scholarly advance..
+### topic:5: ....
+### Notice. it will shows differece results when run the model multiple times.
+```{r}
+models[[3]]$get_top_words(n=3)
+```
+choose 8 topics:
+topic 1：involve economic. 2: lead. 3: responsibility, 4:socially. 5: alumni. 6:technology careers. 7:build societal marketplace. 8: international& social experience.
+
+## 5.	LDA Topic Modeling:
+In the next phase of code, LDA regressions are constructed to get the LDA suggesting model by filtering the classification error rate.
+
+```{r}
+library(ranger)
+for (e in 1:7) {
+  print(e)
+  wdat <- data.frame(stars=factor(AACSB$ReRanking),ws[[e]])
+  topicRF <- ranger(stars ~ ., data=wdat, num.tree=100, probability=TRUE)
+  ## misclassification rate
+  print(topicRF$prediction.error)
+}
+```
+Model_3 with 8 topics have less misclassification rates. However, the best model with 8 topic has a classification error more than 0.7, indicating a relatively low accuracy.
+Notice, if we don’t adjust the national ranking into 8 ranking class. the classification rate will reach 0.9. After reranking it still has an error rate over 0.7 (bad).
+
+Predict Institutional Ranking.
+
+The Target of next codes are conducted to explore the relationship between institutions’ ranking between mission topic provided by 8 topics model. Use the ranger function to build a forest that predicts the Ranking probabilities given document topics . Here, Utilize 8 topic model to predict the first row which ranking belong to 1 and AACSB logon doesn’t present on school web (value is 0). 
+
+```{r}
+wdat3 <- data.frame(ranking=factor(AACSB$ReRanking),ws[[3]])
+topicRF3 <- ranger(ranking ~ ., data=wdat3, num.tree=100, probability=TRUE)
+pwRF3 <- predict(topicRF3, wdat3)$predictions
+round(pwRF3[1,],2)
+
+boxplot(pwRF3[cbind(1:nrow(AACSB),AACSB$ReRanking)] ~ ReRanking, ylim=c(0,1), data=AACSB, 
+        xlab="ranking class", ylab="p.hat for true rating", col=rev(heat.colors(8)))
+```
+Its probability of true rate for the first row of dataset in ranking_1 is less than 0.4 (low) which is less than other rankings (i.e ranking_8 is highest ), indicating a relatively low accuracy.  The fact is the first observation is ranking_1.Consequently, this model may not be suitable for effectively assessing the connection between ranking classes and mission topics provided by the model due to its limited predictive performance. 
+It hints the ranking did not impact the mission topic provided only by model.  The relationship is weak between ranking and the pattern of mission in this prediction. 
+
+## AACSB logo on school web?
+```{r}
+wdat4 <- data.frame(logo=factor(AACSB$AACSBLogoOnWeb),ws[[3]])
+topicRF4 <- ranger(logo ~ ., data=wdat4, num.tree=100, probability=TRUE)
+pwRF4 <- predict(topicRF4, wdat4)$predictions
+round(pwRF4[1,],2)
+```
+The results indicate a high level of connection, with a low prediction classification error of approximate 0.2 in-sample. It's worth noting that this connection remains consistent even when running the model multiple times. We can say the pattern of mission has connection with "AACSB logo on their school web".
+
+## Text regression (assume ranking scale as numeric varibles) --this part wont show in report
+```{r}
+# lasso linear regression (just for try to look what is result)
+library(gamlr)
+fitlin <- gamlr(dtm>0, AACSB$ReRanking, lmr=1e-3)
+plot(fitlin)
+
+# fitted values
+yhat <- drop( predict(fitlin, dtm>0) )
+boxplot(yhat ~ ReRanking, data=AACSB, col=rev(heat.colors(5)))
+#dev.off()
+```
+### text Lasso for selecting the coef of ranking. Panel (a) shows the Lasso path with AICc selection marked, and (b) shows the fitted values.The fitted Ranking using AICc selection, yhat, are shown against true ratings in b. We can use these fitted values to find some mission with high predicted ranking.
+
+```{r}
+blin <- coef(fitlin)[colnames(dtm),]
+mean(blin!=0)
+```
+### Investigating the regression estimate, we see that the AICc has selected a model that has around 0% nonzero coefficients.
+```{r}
+fitlin2 <- gamlr(dtm>0, AACSB$AACSBLogoOnWeb, lmr=1e-3)
+plot(fitlin2)
+yhat2 <- drop( predict(fitlin2, dtm>0) )
+boxplot(yhat2 ~ AACSBLogoOnWeb, data=AACSB, col=rev(heat.colors(5)))
+```
+```{r}
+blin2 <- coef(fitlin2)[colnames(dtm),]
+mean(blin2!=0)
+```
+### model choose 0.07 as coefficients.
+
+6. Logistic Multinational Regression
+
+In this section, we implement logistic multinomial regression (dmr()) to fit models on "ranking" and "logo" with the document-term matrix (dtm). Evaluation of predictive performance and identification of short "missions" with high probabilities for specific rankings.
+Logistic Regression on the document-term matrix (dtm) to assess the relationship with both ranking and the presence of the AACSB logo on the school's website against their dtm.
+We are not only interested in what will be the topic of mission content base on different rankings but also try to find the most possibility of short mission on school web.
+Fit dmr model with a input dtm>0(reduce the dtm dimension), ranking as a factor. Set  target as “response” type to predict the first row of dataset.
+
+```{r}
+library(distrom)
+library(parallel)
+cl <- makeCluster(detectCores())
+fitdmr <- dmr(cl, dtm>0, factor(AACSB$ReRanking))
+
+l <- rowSums(dtm)
+phat <- predict(fitdmr, dtm>0, type="response")
+#round(phat[1:3,],2)
+
+boxplot(phat[cbind(1:nrow(phat),AACSB$ReRanking)] ~ ReRanking, ylim=c(0,1), data=AACSB, 
+        xlab="Ranking Class ", ylab="p.hat for true rating", col=rev(heat.colors(5)))
+#dev.off()
+
+```
+The DMR modeling, which considers the connection between ranking class and mission dtm, also exhibits poor in-sample performance. Its predictive true rate less than o.2 in ranking_1.
+Fitted values are then used to identify short mission statements on the school's website with high probabilities for specific ranking classes.
+The highest-ranking class's short mission statement primarily involves "leaders," while ranking classes 3 and 6 predominantly involve leaders impacting organizations, society, values, and virtues.
+
+
+```{r}
+AACSB$MissionOnschoolWeb[l<7][which.max(phat[l<7,1])]
+```
+```{r}
+AACSB$MissionOnschoolWeb[l<7][which.max(phat[l<7,3])]
+```
+```{r}
+AACSB$MissionOnschoolWeb[l<7][which.max(phat[l<7,6])]
+```
+### the highest ranking class more involves "leaders" directly, ranking class 3,6 involve mostly leaders impact orgainzatons, society, value.... 
+
+
+## 7. WORD EMBEDDING
+
+In this section, the use of word embedding techniques is explored to enhance the model performance on predicting both ranking class and the presence of the "AACSB Logo on web." The process involves the creation of term-content matrices (tcm) and the application of GloVe (Global Vectors for Word Representation) to generate word embeddings.
+
+```{r}
+tcm = create_tcm(tokmission, vectorizer)
+
+glove = GlobalVectors$new(rank = 20, x_max = 10)
+vGlove = glove$fit_transform(tcm)
+
+round(vGlove[1,,drop=FALSE],2)
+#all(rownames(vGlove)==colnames(dtm))
+
+# create the missions on school website vectors as averages of word vectors for each mission
+V = as.matrix( (dtm %*% vGlove)/rowSums(dtm) )
+round(V[1,],2)
+V[is.na(V)] <- 0
+
+vdat <- data.frame(ranking=factor(AACSB$ReRanking),V)
+gloveRF <- ranger(ranking ~ ., data=vdat, num.tree=100, prob=TRUE)
+
+print("misclassification rate for ranking")
+gloveRF$prediction.error
+## plot
+pvRF <- predict(gloveRF, vdat)$predictions
+#png('yelpGloveRF.png', width=4, height=6, units="in", res=720)
+boxplot(pvRF[cbind(1:nrow(AACSB),AACSB$ReRanking)] ~ ReRanking, ylim=c(0,1), data=AACSB, 
+        xlab="Ranking Class", ylab="p.hat for true rating", col=rev(heat.colors(8)))
+
+```
+```{r}
+# random forest
+vdat2 <- data.frame(logo=factor(AACSB$AACSBLogoOnWeb),V)
+gloveRF2 <- ranger(logo ~ ., data=vdat2, num.tree=100, prob=TRUE)
+print("misclassification rate for logo on school web")
+gloveRF2$prediction.error
+```
+The results indicate a slight improvement in performance for both ranking class and the presence of the "AACSB Logo on web" after applying word embedding techniques. However, it's crucial to note that the classification error rate for "ranking" remains above 50%, suggesting that there may be limited connection between ranking class and the mission topics provided by the model.
+
+### Conclusion:
+
+Conclusion:
+
+1. LDA regression provides informative topic insights. Logistic multinomial regression can be useful to find the most probability of short mission statements for mission themes on every ranking. it informs insight into the pattern of “missions”. For example, ranking 1 more specific on educating leaders. other rankings will be focused on technology, social, economic thinking and marketplace correspondingly.
+
+2. Comparing to LDA, Word Embedding slightly improves the model performance.
+
+3. Universities with higher ranking have a low probability to impact the topic pattern provided by model. But the model has a better performance on predicting the probability of showing the AACSB logo on their web based on topic modeling. Continuously exploring the relationship between “logo” and topic pattern of “missions” should get more insight on this project because the fact that universities with higher ranking are less probable to show their logo in school web(by looking at the dataset). Logically, It hints there is kinds of relationship existed between the pattern of mission and its ranking. 
+
+4. weakness: Due to Topic Modeling using the words on same subject of mission, most 
+of missions have similar content. LDA sentiment analysis performs unexpectedly. It is possible LSA or other methods can catch the key and distinctive content of mission well. With my limited knowledge, LDA might distinguish the topics by emotional words close to human nature. When the missions are too short or similar, LDA leads to measuring the words similarity difficultly.
+
+5. Recommendation:  1. Adjust the parameters of maximum and minimum document proportion when pruning vocabulary for rare and common words in dtm process. 2. Try to predict on more observations. 3. Reset the stopword. 4. Fit LDA on mission by different ranking group with only 1 topic model.  Look at the pattern of mission based on ranking classes it might also help to inform insights on mission. 
+
+
+.
+-----------------Thanks--12/7/2023- -------
